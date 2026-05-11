@@ -1,0 +1,34 @@
+# Build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+.*.cmd
+Module.symvers
+modules.order
+.tmp_versions/
+.tmp_versions/*
+
+# Debug files
+*.dwo
+*.dwp
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.orig
+*.backup
+*.old
+
+# Local config (optional)
+.env
+local_config.h
