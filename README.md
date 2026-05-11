@@ -26,6 +26,112 @@ cd rpi5-target
 make
 ```
 
+---
+
+## RPi5 Deployment Guide
+
+### 1. Initial RPi5 Setup
+
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install kernel headers and build tools
+sudo apt install -y linux-headers-$(uname -r) build-essential
+
+# Enable auto-reboot on kernel panic (for safer development)
+echo 5 | sudo tee /proc/sys/kernel/panic
+echo kernel.panic=5 | sudo tee -a /etc/sysctl.conf
+```
+
+### 2. SSH Setup (Passwordless)
+
+```bash
+# On your laptop - generate SSH key
+ssh-keygen -t ed25519 -C "your_email@example.com"
+
+# Copy public key to RPi5
+cat ~/.ssh/id_ed25519.pub | ssh user@rpi5-ip "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+
+# Test connection
+ssh user@rpi5-ip "uname -a"
+```
+
+### 3. Deploy Files to RPi5
+
+```bash
+# From your laptop - sync source files
+rsync -av rpi5-target/ user@rpi5-ip:~/os-project/
+
+# Or use scp
+scp rpi5-target/* user@rpi5-ip:~/os-project/
+```
+
+### 4. Build on RPi5
+
+```bash
+# SSH into RPi5
+ssh user@rpi5-ip
+
+# Navigate to project
+cd ~/os-project
+
+# Build kernel module
+make
+
+# Verify build
+ls -lh event_driver.ko
+```
+
+### 5. Load and Test
+
+```bash
+# Load module (no timer)
+sudo insmod event_driver.ko
+
+# Verify device node created
+ls -l /dev/pi5_event
+
+# Check kernel logs
+sudo dmesg | grep pi5_event
+
+# Test write
+echo "TEST_EVENT" > /dev/pi5_event
+
+# Test read (should show the event)
+cat /dev/pi5_event | od -c
+
+# Unload
+sudo rmmod event_driver
+```
+
+### 6. Full Demo (Timer Enabled)
+
+```bash
+# Terminal 1: Start consumer
+cat /dev/pi5_event | od -c
+
+# Terminal 2: Load with timer
+sudo insmod event_driver.ko timer_enabled=1
+
+# Terminal 3: Send manual event
+echo "BUTTON_PRESS" > /dev/pi5_event
+
+# Expected: Terminal 1 shows both TIMER_EVENT and BUTTON_PRESS
+```
+
+### 7. Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Permission denied | `sudo chmod 666 /dev/pi5_event` |
+| Module won't load | `dmesg \| tail -20` - check kernel logs |
+| Build fails | Check kernel headers: `ls /lib/modules/\$(uname -r)/build` |
+| System crash | Wait 5s for auto-reboot (panic=5 setting) |
+| Connection timeout | Check RPi5 IP: `ping rpi5-ip` |
+
+---
+
 ### Load Module
 ```bash
 # Basic (no timer)
