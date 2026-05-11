@@ -168,6 +168,8 @@ sudo rmmod event_driver
 │       └── development-issues.md  # Bug history
 ├── scripts/                       # Demo scripts
 │   ├── demo_proof.sh              # Full presentation demo
+│   ├── test_blocking.sh           # Blocking queue test
+│   ├── test_stress.sh             # Multiple producer stress test
 │   └── quick_proof.sh             # Quick Q&A proof
 ├── rpi5-target/                   # Files for RPi5 deployment
 │   ├── event_driver.c             # Kernel module source
@@ -188,9 +190,10 @@ sudo rmmod event_driver
 - **Character Device Driver** - Creates `/dev/pi5_event` for user-kernel communication
 - **Circular Buffer Queue** - 32-event kernel-side buffer with spinlock protection
 - **Dual Producer Modes**:
-  - Automatic: Kernel timer fires every 3 seconds (softirq context)
-  - Manual: User writes via `echo "msg" > /dev/pi5_event`
+  - Automatic: Kernel timer fires every 3 seconds (softirq context, drops when full)
+  - Manual: User writes via `echo "msg" > /dev/pi5_event` (blocks when full)
 - **Blocking Consumer** - `read()` blocks until data available (0% CPU while waiting)
+- **Blocking Producer** - Manual writes block when queue is full, resume when space available
 - **epoll Support** - Efficient I/O multiplexing for user-space applications
 
 ## Technical Details
@@ -206,8 +209,17 @@ Total   40    -           -
 
 ### Synchronization
 - **Spinlock** (`spin_lock_irqsave`) - Protects queue in softirq context
-- **Wait Queue** (`wait_queue_head_t`) - Blocks consumer when queue empty
+- **Wait Queues** (`wait_queue_head_t`):
+  - `read_wait` - Blocks consumer when queue empty
+  - `write_wait` - Blocks producer when queue full (manual writes only)
 - **Cannot use mutex** - Timer runs in softirq context where sleeping is forbidden
+
+### Blocking Behavior
+| Context | Queue Full | Queue Empty |
+|---------|------------|-------------|
+| Timer (softirq) | Drops (cannot block) | Wakes consumers |
+| Manual write | Blocks (or returns -EAGAIN if O_NONBLOCK) | - |
+| Manual read | - | Blocks until data available |
 
 ### Contexts
 - **Timer callback** → SoftIRQ (cannot sleep, must use spinlock)
@@ -240,7 +252,7 @@ SPDX-License-Identifier: GPL-2.0
 
 ## Authors
 
-OS Demo Project - Kernel Event Queue IPC
+OS Project - Kernel Event Queue IPC
 
 ## Acknowledgments
 

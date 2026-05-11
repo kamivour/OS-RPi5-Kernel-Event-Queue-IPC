@@ -292,5 +292,5 @@ module_init(event_init);
 module_exit(event_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("OS Demo Project");
+MODULE_AUTHOR("OS Project");
 MODULE_DESCRIPTION("Kernel Event Queue IPC - Debug Version with printk");

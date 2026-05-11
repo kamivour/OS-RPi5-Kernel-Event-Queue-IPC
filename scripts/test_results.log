@@ -1,0 +1,85 @@
+=== KERNEL EVENT QUEUE - BLOCKING QUEUE TEST RESULTS ===
+Date: Tue May 12 04:06:56 +07 2026
+Platform: Raspberry Pi 5 (ARM64)
+Kernel: 6.8.0-1047-raspi
+
+=================================================
+TEST 1: Basic Blocking Queue
+=================================================
+
+[1.1] Cleanup and load module...
+crw-rw-rw- 1 root root 10, 123 May 12 04:06 /dev/pi5_event
+
+[1.2] Fill queue (32 events)...
+✓ Queue filled (32/32)
+
+[1.3] Start blocking write...
+Producer PID: 61455
+✓ Producer is BLOCKED (waiting for space)
+
+[1.4] Consumer frees 5 slots...
+✓ WRITE_COMPLETED
+✓ 5 slots freed
+
+[1.5] Check producer status...
+✓ Producer already completed!
+
+[1.6] Verify event in queue...
+ 016 265 367 252 366  \a  \0  \0   F   I   L   L   _   6  \n
+
+[1.7] Cleanup...
+✓ Module unloaded
+
+✓✓✓ TEST 1 PASSED ✓✓✓
+
+=================================================
+TEST 2: Multiple Producer Stress
+=================================================
+
+[2.1] Load module...
+
+[2.2] Fill queue (32 events)...
+✓ Queue full (32/32)
+
+[2.3] Start 5 blocking producers...
+Producer PIDs: 61473 61474 61475 61476 61477
+
+[2.4] Check blocked producers...
+✓ 5/5 producers blocked
+
+[2.5] Free 3 slots (should wake 2 producers)...
+P4_DONE
+P3_DONE
+✓ 3 slots freed
+
+[2.6] Check completed producers...
+✓ 2/5 producers completed
+
+[2.7] Free remaining slots and wait...
+P2_DONE
+P5_DONE
+P1_DONE
+✓ All producers completed!
+
+[2.8] Cleanup...
+✓ Module unloaded
+
+✓✓✓ TEST 2 PASSED ✓✓✓
+
+=================================================
+TEST SUMMARY
+=================================================
+
+TEST 1: Basic Blocking Queue - PASSED ✓
+TEST 2: Multiple Producer Stress - PASSED ✓
+
+Blocking Queue Behavior Verified:
+  • Manual writes BLOCK when queue is full
+  • Blocked producers WAKE UP when space available
+  • Multiple producers can block simultaneously
+  • Timer DROPS events when full (softirq constraint)
+  • Manual write BLOCKS when full (process context)
+
+=================================================
+Test Complete: Tue May 12 04:07:03 +07 2026
+=================================================

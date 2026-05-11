@@ -32,6 +32,7 @@ struct circular_queue {
 static struct circular_queue event_queue;
 static DEFINE_SPINLOCK(queue_lock);
 static DECLARE_WAIT_QUEUE_HEAD(read_wait);
+static DECLARE_WAIT_QUEUE_HEAD(write_wait);
 
 static struct timer_list event_timer;
 
@@ -109,7 +110,14 @@ static ssize_t event_read(struct file *file, char __user *buf,
 
 	spin_lock(&queue_lock);
 	ret = queue_get(&msg);
-	spin_unlock(&queue_lock);
+
+	// Wake producers if space available
+	if (event_queue.count < QUEUE_DEPTH - 1) {
+		spin_unlock(&queue_lock);
+		wake_up_interruptible(&write_wait);
+	} else {
+		spin_unlock(&queue_lock);
+	}
 
 	if (ret)
 		return -EIO;
@@ -149,14 +157,33 @@ static ssize_t event_write(struct file *file, const char __user *buf,
 
 	spin_lock_irqsave(&queue_lock, flags);
 
-	if (event_queue.count >= QUEUE_DEPTH) {
+	// Check for non-blocking mode first
+	if (file->f_flags & O_NONBLOCK) {
+		if (event_queue.count >= QUEUE_DEPTH) {
+			spin_unlock_irqrestore(&queue_lock, flags);
+			return -EAGAIN;
+		}
+		queue_put(&msg);
 		spin_unlock_irqrestore(&queue_lock, flags);
-		return -ENOSPC;
+		wake_up_interruptible(&read_wait);
+		return count;
+	}
+
+	// Blocking mode: wait for space
+	while (event_queue.count >= QUEUE_DEPTH) {
+		spin_unlock_irqrestore(&queue_lock, flags);
+
+		// Block here (safe in process context)
+		if (wait_event_interruptible(write_wait,
+					     event_queue.count < QUEUE_DEPTH)) {
+			return -ERESTARTSYS;
+		}
+
+		spin_lock_irqsave(&queue_lock, flags);
 	}
 
 	queue_put(&msg);
 	spin_unlock_irqrestore(&queue_lock, flags);
-
 	wake_up_interruptible(&read_wait);
 	return count;
 }
@@ -202,6 +229,7 @@ static void __exit event_exit(void) {
 	timer_enabled = false;
 	del_timer_sync(&event_timer);
 	wake_up_interruptible(&read_wait);
+	wake_up_interruptible(&write_wait);  // Wake any blocking producers
 	memset(&event_queue, 0, sizeof(event_queue));
 	misc_deregister(&event_device);
 
@@ -212,5 +240,5 @@ module_init(event_init);
 module_exit(event_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("OS Demo Project");
-MODULE_DESCRIPTION("Kernel Event Queue IPC - Full Version with Timer");
+MODULE_AUTHOR("OS Project");
+MODULE_DESCRIPTION("Kernel Event Queue IPC - Blocking Queue");

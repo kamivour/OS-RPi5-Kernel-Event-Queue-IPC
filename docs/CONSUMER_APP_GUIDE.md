@@ -177,6 +177,41 @@ std::cout << "[" << duration.count() << "μs] " << event.data << std::endl;
 | `epoll_wait: Bad file descriptor` | Check fd is valid |
 | Garbled output | Wrong struct size - must be exactly 40 bytes |
 
+## Understanding Queue Behavior
+
+### Blocking Queue (Producer Side)
+
+When writing to `/dev/pi5_event`:
+
+| Scenario | Behavior |
+|----------|----------|
+| Queue has space | Write succeeds immediately |
+| Queue full, O_NONBLOCK | Returns `EAGAIN` (try again) |
+| Queue full, blocking mode | **Blocks** until consumer frees space |
+
+**Timer behavior:**
+- Timer runs in softirq context (cannot block)
+- When queue full, timer **drops** events
+- Check `dmesg` for "queue full, dropping timer event" warnings
+
+**Manual write behavior:**
+```bash
+# Blocking write (default)
+echo "TEST" > /dev/pi5_event
+# If queue full (32 events), this will BLOCK until space available
+
+# Non-blocking write
+echo "TEST" > /dev/pi5_event 2>&1 | cat -
+# Returns immediately with "Resource temporarily unavailable" if full
+```
+
+### Consumer Wakeups
+
+Your consumer will be woken up when:
+1. Timer adds an event (every 3 seconds if enabled)
+2. Manual write adds an event
+3. **Producer wakes you after you free space** (back-pressure mechanism)
+
 ## Required Files on RPi5
 
 ```

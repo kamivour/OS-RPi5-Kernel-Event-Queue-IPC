@@ -92,6 +92,27 @@ sudo dd if=/dev/pi5_event bs=40 count=1 2>/dev/null | od -An -c -N20
 echo -e "${GREEN}✓ Data returned from kernel!${NC}"
 echo
 
+# Part 4b: Blocking queue demo
+echo -e "${YELLOW}PART 4b: Blocking Queue Demonstration${NC}"
+echo "─────────────────────────────────────────"
+echo "Filling queue (32 events)..."
+for i in {1..32}; do
+    echo "FILL_$i" > /dev/pi5_event 2>/dev/null || true
+done
+echo -e "${GREEN}✓ Queue full (32/32)${NC}"
+echo
+echo "Starting blocking producer (background)..."
+(echo "BLOCKING_MSG" > /dev/pi5_event && echo "  → Producer completed!") &
+PROD_PID=$!
+echo -e "${YELLOW}  → Producer blocked (PID: $PROD_PID)${NC}"
+sleep 1
+echo
+echo "Consumer frees 1 slot..."
+sudo dd if=/dev/pi5_event bs=40 count=1 2>/dev/null | od -An -c -N12
+wait $PROD_PID
+echo -e "${GREEN}✓ Blocking queue works!${NC}"
+echo
+
 # Part 5: The clincher
 echo -e "${YELLOW}PART 5: The Killer Proof${NC}"
 echo "─────────────────────────────────────────"

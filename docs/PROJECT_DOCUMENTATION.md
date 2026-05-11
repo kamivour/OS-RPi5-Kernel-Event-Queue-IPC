@@ -50,10 +50,11 @@ This project demonstrates fundamental Operating System concepts by implementing 
 │  └──────────────┘      │ • Spinlock  │      │              │   │
 │         │             └─────────────┘             │          │
 │         │                    │                    │          │
-│         │            ┌───────┴───────┐            │          │
-│         │            │  Wait Queue   │◀───────────┘          │
-│         │            │  (sleep/wake) │                       │
-│         │            └───────────────┘                       │
+│         │            ┌───────┴────────┐           │          │
+│         │            │  Wait Queues   │◀──────────┘          │
+│         │            │  • read_wait   │                       │
+│         │            │  • write_wait  │◀────(full queue)     │
+│         │            └────────────────┘                       │
 │         └────────────────────────────────────────────────────┘
 │                           │
 └───────────────────────────┼─────────────────────────────────────┘
@@ -192,7 +193,21 @@ User writes to /dev/pi5_event
 └─────────────────────────────────────────┘
          │
          ▼
-    (Same as above - queue + wake)
+┌─────────────────────────────────────────┐
+│ Check O_NONBLOCK flag                   │
+│ ├─ Yes → Return -EAGAIN if full         │
+│ └─ No  → Block until space available    │
+└─────────────────────────────────────────┘
+         │
+         ▼ (if blocking and full)
+┌─────────────────────────────────────────┐
+│ wait_event_interruptible(write_wait)    │
+│ • Process sleeps (0% CPU)               │
+│ • Wakes when consumer frees space       │
+└─────────────────────────────────────────┘
+         │
+         ▼ (when space available)
+    (Queue + wake consumers)
 ```
 
 ### 3. Consumer Path (Blocking Read)
@@ -210,7 +225,7 @@ User calls read() on /dev/pi5_event
          │
          ▼ (if empty)
 ┌─────────────────────────────────────────┐
-│ wait_event_interruptible()              │
+│ wait_event_interruptible(read_wait)     │
 │ • Adds process to wait queue            │
 │ • Marks process as TASK_INTERRUPTIBLE    │
 │ • Calls scheduler() → CPU switched      │
@@ -223,6 +238,7 @@ User calls read() on /dev/pi5_event
 │ • Process marked runnable               │
 │ • Resumes from wait_event_interruptible │
 │ • Reads event from queue                │
+│ • Wakes producers (space now available) │
 │ • copy_to_user() - returns to userspace │
 └─────────────────────────────────────────┘
 ```
@@ -414,16 +430,42 @@ Consumer started. Waiting for events...
 
 **Objective:** Demonstrate bounded queue behavior
 
+**Non-blocking mode (O_NONBLOCK):**
 ```bash
 # Terminal 1: Don't read (simulate slow consumer)
 # Terminal 2: Spam events
 for i in {1..40}; do echo "MSG_$i" > /dev/pi5_event; done
 ```
+**Expected:** First 32 succeed, remaining fail with "Resource temporarily unavailable"
 
-**Expected:**
-- First 32 messages accepted
-- Messages 33-40 rejected with "No space left on device"
-- dmesg shows warnings if timer tries to write to full queue
+**Blocking mode (default):**
+```bash
+# Terminal 1: Fill queue, then try one more write
+for i in {1..32}; do echo "FILL_$i" > /dev/pi5_event; done
+echo "BLOCKING_TEST" > /dev/pi5_event &
+# Process blocks here...
+
+# Terminal 2: Consumer frees space
+dd if=/dev/pi5_event bs=40 count=1 2>/dev/null
+# Terminal 1: Write completes!
+```
+**Expected:** Write blocks until consumer frees space
+
+### Demo 6: Blocking Queue Script
+
+**Objective:** Automated blocking queue demonstration
+
+```bash
+cd scripts
+./test_blocking.sh
+```
+
+**What happens:**
+1. Queue filled with 32 events
+2. Blocking write started (background)
+3. Consumer frees 5 slots
+4. Producer wakes up and completes
+5. Event verified in queue
 
 ---
 
@@ -521,6 +563,61 @@ if (event_queue.count == 0) {
     // 5. Producer calls wake_up_interruptible()
     // 6. Process marked TASK_RUNNING, scheduled again
     // 7. Resumes here when condition is true
+}
+```
+
+### Blocking Queue Behavior
+
+**Producer blocking vs dropping:**
+
+Our queue implements different behavior based on producer context:
+
+| Context | Queue Full Behavior | Reason |
+|---------|---------------------|--------|
+| Timer callback (softirq) | **Drops** event | Cannot block in interrupt context |
+| Manual write (O_NONBLOCK) | Returns `-EAGAIN` | Non-blocking mode requested |
+| Manual write (blocking) | **Blocks** until space | Process context allows sleeping |
+
+**Why this difference?**
+
+**SoftIRQ context (timer):**
+- Runs in deferred interrupt handler
+- **Cannot sleep or block** - would crash kernel
+- Must use `spin_lock_irqsave` and return immediately
+- Dropping is the only safe option
+
+**Process context (manual write):**
+- Runs in normal process context
+- **Can sleep safely** via wait queues
+- Uses `wait_event_interruptible()` to block
+- Wakes when consumer frees space
+
+**Blocking write flow:**
+```c
+// Check for non-blocking mode first
+if (file->f_flags & O_NONBLOCK) {
+    if (event_queue.count >= QUEUE_DEPTH) {
+        return -EAGAIN;  // Immediate return
+    }
+}
+
+// Blocking mode: wait for space
+while (event_queue.count >= QUEUE_DEPTH) {
+    spin_unlock_irqrestore(&queue_lock, flags);
+    
+    // Block here (safe in process context)
+    wait_event_interruptible(write_wait, event_queue.count < QUEUE_DEPTH);
+    
+    spin_lock_irqsave(&queue_lock, flags);
+}
+// Now space available, proceed with write
+```
+
+**Producer wakeup:**
+```c
+// In event_read(), after consuming from queue:
+if (event_queue.count < QUEUE_DEPTH - 1) {
+    wake_up_interruptible(&write_wait);  // Wake blocked producers
 }
 ```
 

@@ -139,11 +139,12 @@ Trong softirq context, PHẢI disable interrupts để tránh deadlock.
 
 ### 2.4 Wait Queue - Hàng đợi chờ
 
-**Mục đích:** Khi queue rỗng, reader "ngủ" chờ event (0% CPU).
+**Mục đích:** Khi queue rỗng, reader "ngủ" chờ event (0% CPU). Khi queue đầy, writer "ngủ" chờ slot trống.
 
 **Code:**
 ```c
-static DECLARE_WAIT_QUEUE_HEAD(read_wait);
+static DECLARE_WAIT_QUEUE_HEAD(read_wait);   // Cho consumer
+static DECLARE_WAIT_QUEUE_HEAD(write_wait);  // Cho producer
 
 // Trong read():
 if (queue_empty) {
@@ -151,13 +152,26 @@ if (queue_empty) {
     wait_event_interruptible(read_wait, !queue_empty);
 }
 // Tỉnh dậy, có event để đọc
+
+// Trong write():
+if (queue_full) {
+    // Kiểm tra non-blocking mode
+    if (file->f_flags & O_NONBLOCK) {
+        return -EAGAIN;  // Return ngay, không block
+    }
+    // Block cho đến khi có slot trống
+    wait_event_interruptible(write_wait, queue_has_space);
+}
+// Tỉnh dậy, có slot để ghi
 ```
 
 **Cơ chế hoạt động:**
+
+**Consumer (reader):**
 ```
 Thread gọi read():
 1. Queue rỗng → thread chuyển sang TASK_INTERRUPTIBLE
-2. Thread add vào wait queue
+2. Thread add vào read_wait queue
 3. Gọi schedule() → CPU chuyển sang thread khác
 4. Thread hiện tại "ngủ", 0% CPU
 
@@ -167,6 +181,21 @@ Producer viết event:
 3. Kernel đánh dấu reader = TASK_RUNNING
 4. Lần schedule tới, reader tỉnh dậy
 5. Reader đọc event và return về user-space
+```
+
+**Producer (writer) - Blocking mode:**
+```
+Thread gọi write():
+1. Queue đầy → thread chuyển sang TASK_INTERRUPTIBLE
+2. Thread add vào write_wait queue
+3. Gọi schedule() → CPU chuyển sang thread khác
+4. Thread "ngủ", 0% CPU
+
+Consumer đọc event:
+1. Đọc event từ queue
+2. Gọi wake_up_interruptible(&write_wait)
+3. Kernel đánh dấu writer = TASK_RUNNING
+4. Writer tỉnh dậy và ghi event
 ```
 
 ### 2.5 Timer - Bộ đếm thời gian
@@ -257,7 +286,21 @@ User chạy: echo "HELLO" > /dev/pi5_event
 └─────────────────────────────────────────┘
     │
     ▼
-    (Giống timer: queue → wake_up)
+┌─────────────────────────────────────────┐
+│ Kiểm tra queue                          │
+│ ├─ O_NONBLOCK + full → return -EAGAIN   │
+│ └─ Blocking + full → ngủ chờ slot       │
+└─────────────────────────────────────────┘
+    │
+    ▼ (nếu block và queue đầy)
+┌─────────────────────────────────────────┐
+│ wait_event_interruptible(write_wait)    │
+│ • Thread ngủ, 0% CPU                    │
+│ • Tỉnh dậy khi consumer đọc event       │
+└─────────────────────────────────────────┘
+    │
+    ▼ (khi có slot)
+    (Ghi vào queue → wake_up consumers)
 ```
 
 ### 3.3 Consumer (User read)

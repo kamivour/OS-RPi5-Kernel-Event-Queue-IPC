@@ -70,8 +70,18 @@ echo 1 | sudo tee /sys/module/event_driver/parameters/timer_enabled
 
 - **Depth:** 32 events
 - **Size:** 1280 bytes (32 × 40)
-- **Behavior:** Drop new events when full
+- **Behavior (Timer):** Drop new events when full (softirq constraint)
+- **Behavior (Manual):** Block when full, resume when space available
 - **Thread-safe:** Yes (spinlock protected)
+
+## Blocking Queue Behavior
+
+| Producer Type | Queue Full Behavior | Reason |
+|---------------|---------------------|--------|
+| Timer (softirq) | **Drops** event | Cannot block in softirq context |
+| Manual write (O_NONBLOCK) | Returns `-EAGAIN` | Non-blocking mode |
+| Manual write (blocking) | **Blocks** until space | Process context allows blocking |
+| Manual write (signal interrupt) | Returns `-ERESTARTSYS` | Interrupted by signal |
 
 ## Demo Scripts
 
@@ -83,6 +93,20 @@ cat /dev/pi5_event && \
 sudo rmmod event_driver
 ```
 
+### Blocking Queue Test
+```bash
+cd scripts
+./test_blocking.sh
+# Shows: Fill queue → Write blocks → Consumer frees space → Write completes
+```
+
+### Stress Test (Multiple Producers)
+```bash
+cd scripts
+./test_stress.sh
+# Shows: 5 producers blocked → 3 wake up when space freed
+```
+
 ### Timer Test
 ```bash
 sudo insmod event_driver.ko timer_enabled=1 && \
@@ -90,10 +114,11 @@ timeout 10 cat /dev/pi5_event | od -c && \
 sudo rmmod event_driver
 ```
 
-### Stress Test
+### Non-blocking Write Test
 ```bash
 sudo insmod event_driver.ko && \
 for i in {1..40}; do echo "MSG_$i" > /dev/pi5_event; done && \
+# First 32 succeed, remaining fail with "Resource temporarily unavailable"
 sudo rmmod event_driver
 ```
 
@@ -101,10 +126,11 @@ sudo rmmod event_driver
 
 | Code | Meaning |
 |------|---------|
-| `EAGAIN` | Non-blocking read, no data available |
-| `ENOSPC` | Queue full, event dropped |
+| `EAGAIN` | Non-blocking read: no data; Non-blocking write: queue full |
+| `ENOSPC` | (Legacy) Queue full - now blocks instead |
 | `EINVAL` | Invalid read size (must be 40) |
 | `EFAULT` | Bad user pointer |
+| `ERESTARTSYS` | Blocking write interrupted by signal |
 
 ## CPU Usage
 
